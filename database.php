@@ -1,17 +1,21 @@
 <?php
 // config/database.php – Conexión PDO a MySQL
-// Cambia las constantes según tu entorno.
+// Lee las variables de entorno de Railway automáticamente.
 
-define('DB_HOST', 'localhost');
-define('DB_NAME', 'eduvynta');
-define('DB_USER', 'root');         // ← tu usuario MySQL
-define('DB_PASS', '');             // ← tu contraseña MySQL
+define('DB_HOST',    $_ENV['MYSQLHOST']     ?? getenv('MYSQLHOST')     ?? 'localhost');
+define('DB_NAME',    $_ENV['MYSQLDATABASE'] ?? getenv('MYSQLDATABASE') ?? 'railway');
+define('DB_USER',    $_ENV['MYSQLUSER']     ?? getenv('MYSQLUSER')     ?? 'root');
+define('DB_PASS',    $_ENV['MYSQLPASSWORD'] ?? getenv('MYSQLPASSWORD') ?? '');
+define('DB_PORT',    $_ENV['MYSQLPORT']     ?? getenv('MYSQLPORT')     ?? '3306');
 define('DB_CHARSET', 'utf8mb4');
 
 function getDB(): PDO {
     static $pdo = null;
     if ($pdo === null) {
-        $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+        $dsn = "mysql:host=" . DB_HOST
+             . ";port=" . DB_PORT
+             . ";dbname=" . DB_NAME
+             . ";charset=" . DB_CHARSET;
         $options = [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,

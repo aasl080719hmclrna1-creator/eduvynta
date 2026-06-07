@@ -1,7 +1,8 @@
 <?php
 // config/jwt.php – Generación y verificación de JWT HS256 sin librerías externas
+// El secreto se lee desde la variable de entorno JWT_SECRET (configúrala en Railway).
 
-define('JWT_SECRET', 'CAMBIA_ESTE_SECRET_EN_PRODUCCION_32CHARS!!');
+define('JWT_SECRET', $_ENV['JWT_SECRET'] ?? getenv('JWT_SECRET') ?? 'CAMBIA_ESTE_SECRET_EN_PRODUCCION_32CHARS!!');
 define('JWT_EXPIRY', 86400); // 24 horas
 
 function jwtEncode(array $payload): string {
