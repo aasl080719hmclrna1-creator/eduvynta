@@ -1,6 +1,6 @@
 :8080 {
-    root * /app
-    php_fastcgi unix//run/php/php-fpm.sock
+    root * /var/www/html
+    php_fastcgi localhost:9000
     file_server
     encode gzip
 }
