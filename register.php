@@ -1,12 +1,4 @@
 <?php
-/**
- * POST register.php
- * Body: { "nombre", "email", "usuario", "password", "rol" }
- * Response: { "message": "...", "id": int }
- *
- * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
- */
-
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/response.php';
 
@@ -35,7 +27,6 @@ if (!in_array($rol, ['maestro', 'alumno'])) {
     $rol = 'alumno';
 }
 
-// CORREGIDO: mínimo de longitud de contraseña en el backend
 if (strlen($pass) < 6) {
     jsonError('La contraseña debe tener al menos 6 caracteres');
 }

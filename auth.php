@@ -1,7 +1,4 @@
 <?php
-// auth.php – Valida el JWT del header Authorization: Bearer <token>
-// CORREGIDO: require_once apunta al mismo directorio (todos los archivos están en la raíz del proyecto)
-
 require_once __DIR__ . '/jwt.php';
 
 function requireAuth(): array {
@@ -23,7 +20,7 @@ function requireAuth(): array {
         exit;
     }
 
-    return $payload;  // ['id', 'rol', 'nombre', 'exp']
+    return $payload;
 }
 
 function requireRol(string $rol): array {

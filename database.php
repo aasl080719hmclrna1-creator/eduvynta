@@ -1,7 +1,4 @@
 <?php
-// config/database.php – Conexión PDO a MySQL
-// Lee las variables de entorno de Railway automáticamente.
-
 define('DB_HOST',    $_ENV['MYSQLHOST']     ?? getenv('MYSQLHOST')     ?? 'localhost');
 define('DB_NAME',    $_ENV['MYSQLDATABASE'] ?? getenv('MYSQLDATABASE') ?? 'railway');
 define('DB_USER',    $_ENV['MYSQLUSER']     ?? getenv('MYSQLUSER')     ?? 'root');

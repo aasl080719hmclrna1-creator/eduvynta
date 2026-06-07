@@ -1,14 +1,4 @@
 <?php
-/**
- * GET  entregas.php?actividad_id=X  → lista entregas (maestro)
- * POST entregas.php                  → alumno entrega tarea
- * PUT  entregas.php                  → maestro califica { entrega_id, calificacion }
- *
- * CORREGIDO:
- *  - require_once usa __DIR__ hacia el mismo directorio (estructura plana)
- *  - Validación de calificación: cast a float antes de comparar (evita bug con "0")
- */
-
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/response.php';
@@ -18,7 +8,6 @@ $payload = requireAuth();
 $pdo     = getDB();
 $method  = $_SERVER['REQUEST_METHOD'];
 
-// ── GET: maestro ve entregas de una actividad ─────────────────────────────────
 if ($method === 'GET') {
     if ($payload['rol'] !== 'maestro') jsonError('Acceso denegado', 403);
     $actividad_id = (int)($_GET['actividad_id'] ?? 0);
@@ -35,7 +24,6 @@ if ($method === 'GET') {
     jsonResponse($stmt->fetchAll());
 }
 
-// ── POST: alumno sube entrega ─────────────────────────────────────────────────
 if ($method === 'POST') {
     if ($payload['rol'] !== 'alumno') jsonError('Solo alumnos pueden entregar tareas', 403);
 
@@ -45,7 +33,6 @@ if ($method === 'POST') {
 
     if (!$actividad_id) jsonError('actividad_id requerido');
 
-    // Verificar que el alumno pertenece al grupo de la actividad
     $chk = $pdo->prepare('
         SELECT a.id FROM actividades a
         JOIN alumnos_grupos ag ON ag.grupo_id = a.grupo_id
@@ -64,13 +51,11 @@ if ($method === 'POST') {
     jsonResponse(['message' => 'Entrega registrada'], 201);
 }
 
-// ── PUT: maestro califica ─────────────────────────────────────────────────────
 if ($method === 'PUT') {
     if ($payload['rol'] !== 'maestro') jsonError('Solo maestros pueden calificar', 403);
 
     $body         = getBody();
     $entrega_id   = (int)($body['entrega_id']  ?? 0);
-    // CORREGIDO: cast explícito a float para que la validación no falle con valor 0
     $calificacion = isset($body['calificacion']) ? (float)$body['calificacion'] : null;
 
     if (!$entrega_id || $calificacion === null) jsonError('entrega_id y calificacion requeridos');

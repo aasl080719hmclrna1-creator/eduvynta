@@ -1,11 +1,4 @@
 <?php
-/**
- * GET /me.php      → datos del usuario autenticado
- * PUT /me.php      → actualizar nombre / email / password
- *
- * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
- */
-
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/response.php';
@@ -32,9 +25,9 @@ if ($method === 'PUT') {
     $updates = [];
     $params  = [];
 
-    if ($nombre)  { $updates[] = 'nombre = ?';         $params[] = $nombre; }
-    if ($email)   { $updates[] = 'email  = ?';         $params[] = $email;  }
-    if ($newPass) { $updates[] = 'password_hash = ?';  $params[] = password_hash($newPass, PASSWORD_BCRYPT); }
+    if ($nombre)  { $updates[] = 'nombre = ?';        $params[] = $nombre; }
+    if ($email)   { $updates[] = 'email = ?';         $params[] = $email;  }
+    if ($newPass) { $updates[] = 'password_hash = ?'; $params[] = password_hash($newPass, PASSWORD_BCRYPT); }
 
     if (empty($updates)) jsonError('Nada que actualizar');
 

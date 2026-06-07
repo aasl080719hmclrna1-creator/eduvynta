@@ -1,11 +1,4 @@
 <?php
-/**
- * GET  index.php              → lista grupos del maestro autenticado / grupos del alumno
- * POST index.php              → crear grupo (maestro) { nombre, semestre }
- *
- * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
- */
-
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/response.php';

@@ -1,11 +1,4 @@
 <?php
-/**
- * GET stats.php
- * Estadísticas del dashboard según el rol del usuario autenticado.
- *
- * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
- */
-
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/response.php';
@@ -36,7 +29,7 @@ if ($payload['rol'] === 'maestro') {
         WHERE g.maestro_id = ? AND a.fecha = CURDATE()
     ');
     $stmtAsist->execute([$id]);
-    $asist = $stmtAsist->fetch();
+    $asist     = $stmtAsist->fetch();
     $porcAsist = ($asist['total'] > 0)
         ? round($asist['presentes'] / $asist['total'] * 100, 1)
         : null;
@@ -59,7 +52,6 @@ if ($payload['rol'] === 'maestro') {
     ]);
 
 } else {
-    // Alumno
     $stmtPend = $pdo->prepare('
         SELECT COUNT(*) FROM actividades a
         JOIN alumnos_grupos ag ON ag.grupo_id = a.grupo_id AND ag.alumno_id = ?

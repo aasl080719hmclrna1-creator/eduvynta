@@ -1,11 +1,4 @@
 <?php
-/**
- * GET search.php?q=texto&rol=alumno
- * Busca usuarios por nombre o email (para que maestros inscriban alumnos)
- *
- * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
- */
-
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/response.php';

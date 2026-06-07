@@ -1,6 +1,4 @@
 <?php
-// middleware/response.php – Helpers para respuestas JSON y CORS
-
 function setCorsHeaders(): void {
     header('Content-Type: application/json; charset=utf-8');
     header('Access-Control-Allow-Origin: *');
