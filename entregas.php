@@ -1,13 +1,17 @@
 <?php
 /**
- * GET  /api/actividades/entregas.php?actividad_id=X  → lista entregas (maestro)
- * POST /api/actividades/entregas.php                  → alumno entrega tarea
- * PUT  /api/actividades/entregas.php                  → maestro califica { entrega_id, calificacion }
+ * GET  entregas.php?actividad_id=X  → lista entregas (maestro)
+ * POST entregas.php                  → alumno entrega tarea
+ * PUT  entregas.php                  → maestro califica { entrega_id, calificacion }
+ *
+ * CORREGIDO:
+ *  - require_once usa __DIR__ hacia el mismo directorio (estructura plana)
+ *  - Validación de calificación: cast a float antes de comparar (evita bug con "0")
  */
 
-require_once __DIR__ . '/../../config/database.php';
-require_once __DIR__ . '/../../middleware/auth.php';
-require_once __DIR__ . '/../../middleware/response.php';
+require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
 $payload = requireAuth();
@@ -50,7 +54,6 @@ if ($method === 'POST') {
     $chk->execute([$actividad_id, $payload['id']]);
     if (!$chk->fetch()) jsonError('Actividad no encontrada o no autorizado', 403);
 
-    // Upsert (INSERT … ON DUPLICATE KEY UPDATE)
     $ins = $pdo->prepare('
         INSERT INTO entregas (actividad_id, alumno_id, comentario)
         VALUES (?, ?, ?)
@@ -65,9 +68,10 @@ if ($method === 'POST') {
 if ($method === 'PUT') {
     if ($payload['rol'] !== 'maestro') jsonError('Solo maestros pueden calificar', 403);
 
-    $body          = getBody();
-    $entrega_id    = (int)($body['entrega_id']   ?? 0);
-    $calificacion  = $body['calificacion'] ?? null;
+    $body         = getBody();
+    $entrega_id   = (int)($body['entrega_id']  ?? 0);
+    // CORREGIDO: cast explícito a float para que la validación no falle con valor 0
+    $calificacion = isset($body['calificacion']) ? (float)$body['calificacion'] : null;
 
     if (!$entrega_id || $calificacion === null) jsonError('entrega_id y calificacion requeridos');
     if ($calificacion < 0 || $calificacion > 100) jsonError('Calificación debe estar entre 0 y 100');

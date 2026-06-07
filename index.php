@@ -1,14 +1,14 @@
 <?php
 /**
- * GET  /api/grupos/index.php              → lista grupos del maestro autenticado
- * POST /api/grupos/index.php              → crear grupo (maestro)
- * GET  /api/grupos/alumnos.php?grupo_id=X → alumnos de un grupo
- * POST /api/grupos/alumnos.php            → inscribir alumno a grupo { alumno_id, grupo_id }
+ * GET  index.php              → lista grupos del maestro autenticado / grupos del alumno
+ * POST index.php              → crear grupo (maestro) { nombre, semestre }
+ *
+ * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
  */
 
-require_once __DIR__ . '/../../config/database.php';
-require_once __DIR__ . '/../../middleware/auth.php';
-require_once __DIR__ . '/../../middleware/response.php';
+require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
 $payload = requireAuth();
@@ -27,7 +27,6 @@ if ($method === 'GET') {
         ');
         $stmt->execute([$payload['id']]);
     } else {
-        // Alumno: sus grupos inscritos
         $stmt = $pdo->prepare('
             SELECT g.*, u.nombre AS maestro_nombre
             FROM alumnos_grupos ag

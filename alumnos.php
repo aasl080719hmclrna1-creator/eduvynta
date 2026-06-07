@@ -1,13 +1,15 @@
 <?php
 /**
- * GET  /api/grupos/alumnos.php?grupo_id=X → lista alumnos del grupo
- * POST /api/grupos/alumnos.php             → inscribir alumno { alumno_id, grupo_id }
- * DELETE /api/grupos/alumnos.php           → dar de baja { alumno_id, grupo_id }
+ * GET  alumnos.php?grupo_id=X → lista alumnos del grupo
+ * POST alumnos.php             → inscribir alumno { alumno_id, grupo_id }
+ * DELETE alumnos.php           → dar de baja { alumno_id, grupo_id }
+ *
+ * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
  */
 
-require_once __DIR__ . '/../../config/database.php';
-require_once __DIR__ . '/../../middleware/auth.php';
-require_once __DIR__ . '/../../middleware/response.php';
+require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
 $payload = requireAuth();

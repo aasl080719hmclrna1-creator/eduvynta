@@ -1,13 +1,14 @@
 <?php
 /**
- * GET /api/usuarios/me.php      → datos del usuario autenticado
- * PUT /api/usuarios/me.php      → actualizar nombre / email / password
- * GET /api/usuarios/search.php?q=texto → buscar alumnos (maestro, para inscribir)
+ * GET /me.php      → datos del usuario autenticado
+ * PUT /me.php      → actualizar nombre / email / password
+ *
+ * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
  */
 
-require_once __DIR__ . '/../../config/database.php';
-require_once __DIR__ . '/../../middleware/auth.php';
-require_once __DIR__ . '/../../middleware/response.php';
+require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
 $payload = requireAuth();
@@ -24,16 +25,16 @@ if ($method === 'GET') {
 
 if ($method === 'PUT') {
     $body    = getBody();
-    $nombre  = trim($body['nombre']  ?? '');
-    $email   = trim($body['email']   ?? '');
+    $nombre  = trim($body['nombre']   ?? '');
+    $email   = trim($body['email']    ?? '');
     $newPass = trim($body['password'] ?? '');
 
     $updates = [];
     $params  = [];
 
-    if ($nombre) { $updates[] = 'nombre = ?';  $params[] = $nombre; }
-    if ($email)  { $updates[] = 'email  = ?';  $params[] = $email;  }
-    if ($newPass){ $updates[] = 'password_hash = ?'; $params[] = password_hash($newPass, PASSWORD_BCRYPT); }
+    if ($nombre)  { $updates[] = 'nombre = ?';         $params[] = $nombre; }
+    if ($email)   { $updates[] = 'email  = ?';         $params[] = $email;  }
+    if ($newPass) { $updates[] = 'password_hash = ?';  $params[] = password_hash($newPass, PASSWORD_BCRYPT); }
 
     if (empty($updates)) jsonError('Nada que actualizar');
 

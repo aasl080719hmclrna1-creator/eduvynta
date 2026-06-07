@@ -1,7 +1,8 @@
 <?php
-// middleware/auth.php – Valida el JWT del header Authorization: Bearer <token>
+// auth.php – Valida el JWT del header Authorization: Bearer <token>
+// CORREGIDO: require_once apunta al mismo directorio (todos los archivos están en la raíz del proyecto)
 
-require_once __DIR__ . '/../config/jwt.php';
+require_once __DIR__ . '/jwt.php';
 
 function requireAuth(): array {
     $headers = getallheaders();

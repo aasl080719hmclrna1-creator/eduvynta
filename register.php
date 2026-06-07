@@ -1,12 +1,14 @@
 <?php
 /**
- * POST /api/auth/register.php
+ * POST register.php
  * Body: { "nombre", "email", "usuario", "password", "rol" }
  * Response: { "message": "...", "id": int }
+ *
+ * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
  */
 
-require_once __DIR__ . '/../../config/database.php';
-require_once __DIR__ . '/../../middleware/response.php';
+require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
 
@@ -33,9 +35,13 @@ if (!in_array($rol, ['maestro', 'alumno'])) {
     $rol = 'alumno';
 }
 
+// CORREGIDO: mínimo de longitud de contraseña en el backend
+if (strlen($pass) < 6) {
+    jsonError('La contraseña debe tener al menos 6 caracteres');
+}
+
 $pdo = getDB();
 
-// Verificar duplicados
 $chk = $pdo->prepare('SELECT id FROM usuarios WHERE email = ? OR usuario = ? LIMIT 1');
 $chk->execute([$email, $usuario]);
 if ($chk->fetch()) {

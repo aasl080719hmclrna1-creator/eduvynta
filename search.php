@@ -1,12 +1,14 @@
 <?php
 /**
- * GET /api/usuarios/search.php?q=texto&rol=alumno
+ * GET search.php?q=texto&rol=alumno
  * Busca usuarios por nombre o email (para que maestros inscriban alumnos)
+ *
+ * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
  */
 
-require_once __DIR__ . '/../../config/database.php';
-require_once __DIR__ . '/../../middleware/auth.php';
-require_once __DIR__ . '/../../middleware/response.php';
+require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
 requireRol('maestro');

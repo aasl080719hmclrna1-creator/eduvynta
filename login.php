@@ -1,13 +1,15 @@
 <?php
 /**
- * POST /api/auth/login.php
+ * POST login.php
  * Body: { "usuario": "string", "password": "string" }
  * Response: { "token": "jwt", "usuario": { id, nombre, email, rol } }
+ *
+ * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
  */
 
-require_once __DIR__ . '/../../config/database.php';
-require_once __DIR__ . '/../../config/jwt.php';
-require_once __DIR__ . '/../../middleware/response.php';
+require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/jwt.php';
+require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
 

@@ -1,14 +1,14 @@
 <?php
 /**
- * GET /api/usuarios/stats.php
- * Devuelve estadísticas del dashboard según el rol:
- *   Maestro: { total_alumnos, total_actividades, porcentaje_asistencias, promedio_grupo }
- *   Alumno:  { tareas_pendientes, tareas_entregadas, promedio_general, grupos }
+ * GET stats.php
+ * Estadísticas del dashboard según el rol del usuario autenticado.
+ *
+ * CORREGIDO: require_once usa __DIR__ hacia el mismo directorio (estructura plana)
  */
 
-require_once __DIR__ . '/../../config/database.php';
-require_once __DIR__ . '/../../middleware/auth.php';
-require_once __DIR__ . '/../../middleware/response.php';
+require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
 $payload = requireAuth();
@@ -16,7 +16,6 @@ $pdo     = getDB();
 $id      = $payload['id'];
 
 if ($payload['rol'] === 'maestro') {
-    // Total alumnos en grupos del maestro
     $stmtAlumnos = $pdo->prepare('
         SELECT COUNT(DISTINCT ag.alumno_id) AS total
         FROM grupos g
@@ -26,43 +25,39 @@ if ($payload['rol'] === 'maestro') {
     $stmtAlumnos->execute([$id]);
     $totalAlumnos = (int)$stmtAlumnos->fetchColumn();
 
-    // Total actividades creadas
     $stmtActs = $pdo->prepare('SELECT COUNT(*) FROM actividades WHERE maestro_id = ?');
     $stmtActs->execute([$id]);
     $totalActs = (int)$stmtActs->fetchColumn();
 
-    // Porcentaje asistencias hoy
     $stmtAsist = $pdo->prepare('
-        SELECT
-            COUNT(*) AS total,
-            SUM(presente) AS presentes
+        SELECT COUNT(*) AS total, SUM(presente) AS presentes
         FROM asistencias a
         JOIN grupos g ON g.id = a.grupo_id
         WHERE g.maestro_id = ? AND a.fecha = CURDATE()
     ');
     $stmtAsist->execute([$id]);
     $asist = $stmtAsist->fetch();
-    $porcAsist = $asist['total'] > 0
+    $porcAsist = ($asist['total'] > 0)
         ? round($asist['presentes'] / $asist['total'] * 100, 1)
         : null;
 
-    // Promedio del grupo
     $stmtProm = $pdo->prepare('
         SELECT AVG(c.promedio_final) AS prom
         FROM calificaciones c
         JOIN materias m ON m.id = c.materia_id
-        JOIN grupos g   ON g.id  = m.grupo_id
+        JOIN grupos g   ON g.id = m.grupo_id
         WHERE g.maestro_id = ? AND c.promedio_final IS NOT NULL
     ');
     $stmtProm->execute([$id]);
     $prom = $stmtProm->fetchColumn();
 
     jsonResponse([
-        'total_alumnos'           => $totalAlumnos,
-        'total_actividades'       => $totalActs,
-        'porcentaje_asistencias'  => $porcAsist,
-        'promedio_grupo'          => $prom !== false ? round((float)$prom, 2) : null,
+        'total_alumnos'          => $totalAlumnos,
+        'total_actividades'      => $totalActs,
+        'porcentaje_asistencias' => $porcAsist,
+        'promedio_grupo'         => $prom !== false ? round((float)$prom, 2) : null,
     ]);
+
 } else {
     // Alumno
     $stmtPend = $pdo->prepare('
