@@ -8,6 +8,7 @@ $payload = requireAuth();
 $pdo     = getDB();
 $method  = $_SERVER['REQUEST_METHOD'];
 
+// ── GET: maestro ve sus actividades, alumno ve las de su grupo ────────────
 if ($method === 'GET') {
     $id = (int)($_GET['id'] ?? 0);
 
@@ -34,6 +35,7 @@ if ($method === 'GET') {
         ');
         $stmt->execute([$payload['id']]);
     } else {
+        // Alumno: solo ve actividades de sus grupos
         $stmt = $pdo->prepare('
             SELECT a.*, m.nombre AS materia_nombre
             FROM actividades a
@@ -48,16 +50,21 @@ if ($method === 'GET') {
     jsonResponse($stmt->fetchAll());
 }
 
+// ── POST: solo maestros pueden crear actividades ──────────────────────────
 if ($method === 'POST') {
-    if ($payload['rol'] !== 'maestro') jsonError('Solo maestros pueden crear actividades', 403);
+    if ($payload['rol'] !== 'maestro') {
+        jsonError('Solo maestros pueden crear actividades', 403);
+    }
 
-    $body        = getBody();
-    $descripcion = trim($body['descripcion']  ?? '');
+    $body         = getBody();
+    $descripcion  = trim($body['descripcion']  ?? '');
     $fecha_limite = trim($body['fecha_limite'] ?? '');
-    $grupo_id    = (int)($body['grupo_id']    ?? 0);
-    $materia_id  = (int)($body['materia_id']  ?? 0);
+    $grupo_id     = (int)($body['grupo_id']    ?? 0);
+    $materia_id   = (int)($body['materia_id']  ?? 0);
 
-    if (!$descripcion || !$fecha_limite) jsonError('descripcion y fecha_limite son requeridos');
+    if (!$descripcion || !$fecha_limite) {
+        jsonError('descripcion y fecha_limite son requeridos');
+    }
 
     $ins = $pdo->prepare('
         INSERT INTO actividades (maestro_id, grupo_id, materia_id, descripcion, fecha_limite)
@@ -65,7 +72,7 @@ if ($method === 'POST') {
     ');
     $ins->execute([
         $payload['id'],
-        $grupo_id  ?: null,
+        $grupo_id   ?: null,
         $materia_id ?: null,
         $descripcion,
         $fecha_limite,
@@ -74,8 +81,11 @@ if ($method === 'POST') {
     jsonResponse(['message' => 'Actividad creada', 'id' => (int)$pdo->lastInsertId()], 201);
 }
 
+// ── PUT: solo maestros pueden editar sus propias actividades ──────────────
 if ($method === 'PUT') {
-    if ($payload['rol'] !== 'maestro') jsonError('Solo maestros pueden editar actividades', 403);
+    if ($payload['rol'] !== 'maestro') {
+        jsonError('Solo maestros pueden editar actividades', 403);
+    }
 
     $body         = getBody();
     $id           = (int)($body['id']          ?? 0);
@@ -84,16 +94,15 @@ if ($method === 'PUT') {
 
     if (!$id) jsonError('id es requerido');
 
+    // Verificar que la actividad le pertenece al maestro
     $chk = $pdo->prepare('SELECT id FROM actividades WHERE id = ? AND maestro_id = ? LIMIT 1');
     $chk->execute([$id, $payload['id']]);
     if (!$chk->fetch()) jsonError('Actividad no encontrada o no autorizado', 403);
 
     $updates = [];
     $params  = [];
-
     if ($descripcion)  { $updates[] = 'descripcion = ?';  $params[] = $descripcion; }
     if ($fecha_limite) { $updates[] = 'fecha_limite = ?'; $params[] = $fecha_limite; }
-
     if (empty($updates)) jsonError('Nada que actualizar');
 
     $params[] = $id;
@@ -102,8 +111,11 @@ if ($method === 'PUT') {
     jsonResponse(['message' => 'Actividad actualizada']);
 }
 
+// ── DELETE: solo maestros pueden eliminar sus actividades ─────────────────
 if ($method === 'DELETE') {
-    if ($payload['rol'] !== 'maestro') jsonError('Solo maestros pueden eliminar actividades', 403);
+    if ($payload['rol'] !== 'maestro') {
+        jsonError('Solo maestros pueden eliminar actividades', 403);
+    }
 
     $body = getBody();
     $id   = (int)($body['id'] ?? 0);

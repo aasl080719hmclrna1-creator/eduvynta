@@ -8,6 +8,7 @@ $payload = requireAuth();
 $pdo     = getDB();
 $method  = $_SERVER['REQUEST_METHOD'];
 
+// ── GET: devuelve datos completos del usuario logueado ────────────────────
 if ($method === 'GET') {
     $stmt = $pdo->prepare('SELECT id, nombre, email, usuario, rol, creado_en FROM usuarios WHERE id = ? LIMIT 1');
     $stmt->execute([$payload['id']]);
@@ -16,6 +17,7 @@ if ($method === 'GET') {
     jsonResponse($user);
 }
 
+// ── PUT: actualizar perfil ────────────────────────────────────────────────
 if ($method === 'PUT') {
     $body    = getBody();
     $nombre  = trim($body['nombre']   ?? '');

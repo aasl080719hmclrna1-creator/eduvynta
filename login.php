@@ -30,6 +30,7 @@ if (!password_verify($pass, $user['password_hash'])) {
     jsonError('Credenciales incorrectas', 401);
 }
 
+// Generar token JWT con id, rol y nombre del usuario
 $token = jwtEncode([
     'id'     => $user['id'],
     'rol'    => $user['rol'],

@@ -8,8 +8,11 @@ $payload = requireAuth();
 $pdo     = getDB();
 $method  = $_SERVER['REQUEST_METHOD'];
 
+// ── GET: solo maestro puede ver todas las entregas de una actividad ───────
 if ($method === 'GET') {
-    if ($payload['rol'] !== 'maestro') jsonError('Acceso denegado', 403);
+    if ($payload['rol'] !== 'maestro') {
+        jsonError('Acceso denegado', 403);
+    }
     $actividad_id = (int)($_GET['actividad_id'] ?? 0);
     if (!$actividad_id) jsonError('actividad_id requerido');
 
@@ -24,8 +27,11 @@ if ($method === 'GET') {
     jsonResponse($stmt->fetchAll());
 }
 
+// ── POST: solo alumnos pueden entregar tareas ─────────────────────────────
 if ($method === 'POST') {
-    if ($payload['rol'] !== 'alumno') jsonError('Solo alumnos pueden entregar tareas', 403);
+    if ($payload['rol'] !== 'alumno') {
+        jsonError('Solo alumnos pueden entregar tareas', 403);
+    }
 
     $body         = getBody();
     $actividad_id = (int)($body['actividad_id'] ?? 0);
@@ -33,13 +39,16 @@ if ($method === 'POST') {
 
     if (!$actividad_id) jsonError('actividad_id requerido');
 
+    // Verificar que el alumno pertenece al grupo de la actividad
     $chk = $pdo->prepare('
         SELECT a.id FROM actividades a
         JOIN alumnos_grupos ag ON ag.grupo_id = a.grupo_id
         WHERE a.id = ? AND ag.alumno_id = ? LIMIT 1
     ');
     $chk->execute([$actividad_id, $payload['id']]);
-    if (!$chk->fetch()) jsonError('Actividad no encontrada o no autorizado', 403);
+    if (!$chk->fetch()) {
+        jsonError('Actividad no encontrada o no autorizado', 403);
+    }
 
     $ins = $pdo->prepare('
         INSERT INTO entregas (actividad_id, alumno_id, comentario)
@@ -51,15 +60,22 @@ if ($method === 'POST') {
     jsonResponse(['message' => 'Entrega registrada'], 201);
 }
 
+// ── PUT: solo maestros pueden calificar ───────────────────────────────────
 if ($method === 'PUT') {
-    if ($payload['rol'] !== 'maestro') jsonError('Solo maestros pueden calificar', 403);
+    if ($payload['rol'] !== 'maestro') {
+        jsonError('Solo maestros pueden calificar', 403);
+    }
 
     $body         = getBody();
     $entrega_id   = (int)($body['entrega_id']  ?? 0);
     $calificacion = isset($body['calificacion']) ? (float)$body['calificacion'] : null;
 
-    if (!$entrega_id || $calificacion === null) jsonError('entrega_id y calificacion requeridos');
-    if ($calificacion < 0 || $calificacion > 100) jsonError('Calificación debe estar entre 0 y 100');
+    if (!$entrega_id || $calificacion === null) {
+        jsonError('entrega_id y calificacion requeridos');
+    }
+    if ($calificacion < 0 || $calificacion > 100) {
+        jsonError('Calificación debe estar entre 0 y 100');
+    }
 
     $upd = $pdo->prepare('UPDATE entregas SET calificacion = ? WHERE id = ?');
     $upd->execute([$calificacion, $entrega_id]);
