@@ -10,16 +10,44 @@ $method  = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'GET') {
     $grupo_id = (int)($_GET['grupo_id'] ?? 0);
-    if (!$grupo_id) jsonError('grupo_id requerido');
 
+    // Si se pasa grupo_id, filtrar por ese grupo
+    if ($grupo_id) {
+        $stmt = $pdo->prepare('
+            SELECT u.id, u.nombre, u.email, u.usuario
+            FROM alumnos_grupos ag
+            JOIN usuarios u ON u.id = ag.alumno_id
+            WHERE ag.grupo_id = ?
+            ORDER BY u.nombre ASC
+        ');
+        $stmt->execute([$grupo_id]);
+        jsonResponse($stmt->fetchAll());
+    }
+
+    // Si el maestro no manda grupo_id, devolver TODOS los alumnos de sus grupos
+    if ($payload['rol'] === 'maestro') {
+        $stmt = $pdo->prepare('
+            SELECT DISTINCT u.id, u.nombre, u.email, u.usuario, ag.grupo_id
+            FROM grupos g
+            JOIN alumnos_grupos ag ON ag.grupo_id = g.id
+            JOIN usuarios u ON u.id = ag.alumno_id
+            WHERE g.maestro_id = ? AND g.activo = 1
+            ORDER BY u.nombre ASC
+        ');
+        $stmt->execute([$payload['id']]);
+        jsonResponse($stmt->fetchAll());
+    }
+
+    // Alumno: sus propios compañeros de grupo
     $stmt = $pdo->prepare('
-        SELECT u.id, u.nombre, u.email, u.usuario
-        FROM alumnos_grupos ag
-        JOIN usuarios u ON u.id = ag.alumno_id
-        WHERE ag.grupo_id = ?
+        SELECT DISTINCT u.id, u.nombre, u.email, u.usuario
+        FROM alumnos_grupos ag1
+        JOIN alumnos_grupos ag2 ON ag2.grupo_id = ag1.grupo_id
+        JOIN usuarios u ON u.id = ag2.alumno_id
+        WHERE ag1.alumno_id = ?
         ORDER BY u.nombre ASC
     ');
-    $stmt->execute([$grupo_id]);
+    $stmt->execute([$payload['id']]);
     jsonResponse($stmt->fetchAll());
 }
 
