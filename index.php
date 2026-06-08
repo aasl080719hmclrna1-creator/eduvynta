@@ -8,6 +8,7 @@ $payload = requireAuth();
 $pdo     = getDB();
 $method  = $_SERVER['REQUEST_METHOD'];
 
+// ── GET: lista de grupos ──────────────────────────────────────────────────
 if ($method === 'GET') {
     if ($payload['rol'] === 'maestro') {
         $stmt = $pdo->prepare('
@@ -26,12 +27,14 @@ if ($method === 'GET') {
             JOIN grupos   g ON g.id = ag.grupo_id
             JOIN usuarios u ON u.id = g.maestro_id
             WHERE ag.alumno_id = ? AND g.activo = 1
+            ORDER BY g.nombre ASC
         ');
         $stmt->execute([$payload['id']]);
     }
     jsonResponse($stmt->fetchAll());
 }
 
+// ── POST: crear grupo (solo maestro) ─────────────────────────────────────
 if ($method === 'POST') {
     if ($payload['rol'] !== 'maestro') jsonError('Solo maestros pueden crear grupos', 403);
 
@@ -41,10 +44,47 @@ if ($method === 'POST') {
 
     if (!$nombre) jsonError('nombre es requerido');
 
-    $ins = $pdo->prepare('INSERT INTO grupos (nombre, semestre, maestro_id) VALUES (?, ?, ?)');
-    $ins->execute([$nombre, $semestre, $payload['id']]);
+    // Generar código único de 6 caracteres alfanumérico
+    do {
+        $codigo = strtoupper(substr(md5(uniqid(rand(), true)), 0, 6));
+        $chk = $pdo->prepare('SELECT id FROM grupos WHERE codigo_acceso = ? LIMIT 1');
+        $chk->execute([$codigo]);
+    } while ($chk->fetch());
 
-    jsonResponse(['message' => 'Grupo creado', 'id' => (int)$pdo->lastInsertId()], 201);
+    $ins = $pdo->prepare('INSERT INTO grupos (nombre, semestre, maestro_id, codigo_acceso) VALUES (?, ?, ?, ?)');
+    $ins->execute([$nombre, $semestre, $payload['id'], $codigo]);
+
+    jsonResponse([
+        'message'       => 'Grupo creado',
+        'id'            => (int)$pdo->lastInsertId(),
+        'codigo_acceso' => $codigo
+    ], 201);
+}
+
+// ── PUT: alumno se une a un grupo con código ──────────────────────────────
+if ($method === 'PUT') {
+    if ($payload['rol'] !== 'alumno') jsonError('Solo alumnos pueden unirse a grupos', 403);
+
+    $body   = getBody();
+    $codigo = strtoupper(trim($body['codigo'] ?? ''));
+
+    if (strlen($codigo) !== 6) jsonError('El código debe tener 6 caracteres');
+
+    $grp = $pdo->prepare('SELECT id, nombre FROM grupos WHERE codigo_acceso = ? AND activo = 1 LIMIT 1');
+    $grp->execute([$codigo]);
+    $grupo = $grp->fetch();
+
+    if (!$grupo) jsonError('Código inválido o clase no encontrada', 404);
+
+    // Ya inscrito?
+    $ya = $pdo->prepare('SELECT id FROM alumnos_grupos WHERE alumno_id = ? AND grupo_id = ? LIMIT 1');
+    $ya->execute([$payload['id'], $grupo['id']]);
+    if ($ya->fetch()) jsonError('Ya estás inscrito en esta clase', 409);
+
+    $ins = $pdo->prepare('INSERT INTO alumnos_grupos (alumno_id, grupo_id) VALUES (?, ?)');
+    $ins->execute([$payload['id'], $grupo['id']]);
+
+    jsonResponse(['message' => 'Te uniste a ' . $grupo['nombre'], 'grupo_id' => (int)$grupo['id'], 'grupo_nombre' => $grupo['nombre']], 200);
 }
 
 jsonError('Método no permitido', 405);
