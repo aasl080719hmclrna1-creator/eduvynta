@@ -1,5 +1,11 @@
 <?php
+/**
+ * register_maestro.php
+ * Endpoint para que un maestro autenticado cree cuentas de maestro de apoyo.
+ * Solo accesible con token de rol "maestro".
+ */
 require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
@@ -8,15 +14,14 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     jsonError('Método no permitido', 405);
 }
 
+// Solo maestros pueden acceder a este endpoint
+$payload = requireRol('maestro');
+
 $body    = getBody();
 $nombre  = trim($body['nombre']   ?? '');
 $email   = trim($body['email']    ?? '');
 $usuario = trim($body['usuario']  ?? '');
 $pass    = trim($body['password'] ?? '');
-
-// El registro público SIEMPRE crea alumnos.
-// Los maestros de apoyo los registra el maestro desde su panel.
-$rol = 'alumno';
 
 if (!$nombre || !$email || !$usuario || !$pass) {
     jsonError('Todos los campos son requeridos');
@@ -41,6 +46,9 @@ if ($chk->fetch()) {
 $hash = password_hash($pass, PASSWORD_BCRYPT);
 
 $ins = $pdo->prepare('INSERT INTO usuarios (nombre, email, usuario, password_hash, rol) VALUES (?, ?, ?, ?, ?)');
-$ins->execute([$nombre, $email, $usuario, $hash, $rol]);
+$ins->execute([$nombre, $email, $usuario, $hash, 'maestro']);
 
-jsonResponse(['message' => 'Cuenta de alumno creada exitosamente', 'id' => (int)$pdo->lastInsertId()], 201);
+jsonResponse([
+    'message' => 'Maestro de apoyo creado exitosamente',
+    'id'      => (int)$pdo->lastInsertId()
+], 201);
