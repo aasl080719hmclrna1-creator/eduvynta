@@ -2,12 +2,16 @@
 ob_start();
 ini_set('display_errors', '0');
 error_reporting(0);
+ob_start();
+ini_set('display_errors', '0');
+error_reporting(0);
 
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
+ob_end_clean();
 ob_end_clean();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') jsonError('Método no permitido', 405);

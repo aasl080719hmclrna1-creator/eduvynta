@@ -1,4 +1,7 @@
 <?php
+ob_start();
+ini_set('display_errors', '0');
+error_reporting(0);
 /**
  * register_maestro.php
  * Endpoint para que un maestro autenticado cree cuentas de maestro de apoyo.
@@ -9,6 +12,7 @@ require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
+ob_end_clean();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     jsonError('Método no permitido', 405);
