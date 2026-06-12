@@ -10,13 +10,18 @@
  *
  * GET   ?alumno_id=X[&grupo_id=Y]
  *       → historial de asistencias del alumno
- *       (el alumno solo puede ver las suyas; el maestro puede ver cualquiera)
  */
+ob_start();
+ini_set('display_errors', '0');
+error_reporting(0);
+
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/response.php';
 
 setCorsHeaders();
+ob_end_clean();
+
 $payload = requireAuth();
 $pdo     = getDB();
 $method  = $_SERVER['REQUEST_METHOD'];
@@ -29,7 +34,6 @@ if ($method === 'GET') {
 
     // Maestro ve asistencias de un grupo en una fecha
     if ($payload['rol'] === 'maestro' && $grupo_id && !$alumno_id) {
-        // Verificar que el grupo le pertenece
         $chk = $pdo->prepare('SELECT id FROM grupos WHERE id = ? AND maestro_id = ? LIMIT 1');
         $chk->execute([$grupo_id, $payload['id']]);
         if (!$chk->fetch()) jsonError('Grupo no autorizado', 403);
@@ -47,7 +51,6 @@ if ($method === 'GET') {
 
     // Ver historial de un alumno concreto
     if ($alumno_id) {
-        // Alumno solo puede ver sus propias asistencias
         if ($payload['rol'] === 'alumno' && $payload['id'] !== $alumno_id) {
             jsonError('Acceso denegado', 403);
         }
@@ -71,7 +74,7 @@ if ($method === 'GET') {
         jsonResponse($stmt->fetchAll());
     }
 
-    // Alumno: sus propias asistencias de hoy en todos sus grupos
+    // Alumno: sus asistencias de hoy en todos sus grupos
     if ($payload['rol'] === 'alumno') {
         $stmt = $pdo->prepare('
             SELECT a.*, g.nombre AS grupo_nombre
@@ -103,35 +106,37 @@ if ($method === 'POST') {
         jsonError('alumno_id y grupo_id son requeridos');
     }
 
-    // Validar formato de fecha
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha)) {
         jsonError('Formato de fecha inválido (use yyyy-MM-dd)');
     }
 
-    // Verificar que el grupo le pertenece al maestro
+    // Verificar que el grupo pertenece al maestro
     $chk = $pdo->prepare('SELECT id FROM grupos WHERE id = ? AND maestro_id = ? LIMIT 1');
     $chk->execute([$grupo_id, $payload['id']]);
     if (!$chk->fetch()) jsonError('Grupo no autorizado', 403);
 
-    // Verificar que el alumno pertenece al grupo
-    $chkA = $pdo->prepare('SELECT id FROM alumnos_grupos WHERE alumno_id = ? AND grupo_id = ? LIMIT 1');
+    // FIX: usar alumno_id en vez de id — la tabla alumnos_grupos es pivot y puede no tener columna 'id'
+    $chkA = $pdo->prepare('SELECT alumno_id FROM alumnos_grupos WHERE alumno_id = ? AND grupo_id = ? LIMIT 1');
     $chkA->execute([$alumno_id, $grupo_id]);
     if (!$chkA->fetch()) jsonError('El alumno no pertenece a este grupo', 403);
 
-    // INSERT o UPDATE (upsert)
-    $stmt = $pdo->prepare('
-        INSERT INTO asistencias (alumno_id, grupo_id, fecha, presente)
-        VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-            presente   = VALUES(presente),
-            updated_at = CURRENT_TIMESTAMP
-    ');
-    $stmt->execute([$alumno_id, $grupo_id, $fecha, $presente ? 1 : 0]);
+    // FIX: SELECT + UPDATE/INSERT manual en vez de ON DUPLICATE KEY (no requiere índice UNIQUE en la tabla)
+    $existing = $pdo->prepare('SELECT id FROM asistencias WHERE alumno_id = ? AND grupo_id = ? AND fecha = ? LIMIT 1');
+    $existing->execute([$alumno_id, $grupo_id, $fecha]);
+    $row = $existing->fetch();
+
+    if ($row) {
+        $upd = $pdo->prepare('UPDATE asistencias SET presente = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+        $upd->execute([$presente ? 1 : 0, $row['id']]);
+    } else {
+        $ins = $pdo->prepare('INSERT INTO asistencias (alumno_id, grupo_id, fecha, presente) VALUES (?, ?, ?, ?)');
+        $ins->execute([$alumno_id, $grupo_id, $fecha, $presente ? 1 : 0]);
+    }
 
     jsonResponse(['message' => 'Asistencia registrada'], 201);
 }
 
-// ── DELETE: eliminar registro de asistencia (solo maestro) ────────────────────
+// ── DELETE ────────────────────────────────────────────────────────────────────
 if ($method === 'DELETE') {
     if ($payload['rol'] !== 'maestro') {
         jsonError('Solo maestros pueden eliminar asistencias', 403);
@@ -146,7 +151,6 @@ if ($method === 'DELETE') {
         jsonError('alumno_id, grupo_id y fecha son requeridos');
     }
 
-    // Verificar que el grupo le pertenece al maestro
     $chk = $pdo->prepare('SELECT id FROM grupos WHERE id = ? AND maestro_id = ? LIMIT 1');
     $chk->execute([$grupo_id, $payload['id']]);
     if (!$chk->fetch()) jsonError('Grupo no autorizado', 403);
