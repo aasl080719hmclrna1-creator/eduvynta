@@ -12,7 +12,7 @@ $payload = requireAuth();
 $pdo     = getDB();
 $method  = $_SERVER['REQUEST_METHOD'];
 
-// ── GET: solo maestro puede ver todas las entregas de una actividad ───────
+// ── GET: maestro ve todas las entregas de una actividad ───────────────────
 if ($method === 'GET') {
     if ($payload['rol'] !== 'maestro') {
         jsonError('Acceso denegado', 403);
@@ -31,15 +31,24 @@ if ($method === 'GET') {
     jsonResponse($stmt->fetchAll());
 }
 
-// ── POST: solo alumnos pueden entregar tareas ─────────────────────────────
+// ── POST: alumno sube entrega (con archivo opcional) ──────────────────────
 if ($method === 'POST') {
     if ($payload['rol'] !== 'alumno') {
         jsonError('Solo alumnos pueden entregar tareas', 403);
     }
 
-    $body         = getBody();
-    $actividad_id = (int)($body['actividad_id'] ?? 0);
-    $comentario   = trim($body['comentario'] ?? '');
+    // Detectar si viene como multipart/form-data (con archivo) o JSON
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+    $isMultipart = str_contains($contentType, 'multipart/form-data');
+
+    if ($isMultipart) {
+        $actividad_id = (int)($_POST['actividad_id'] ?? 0);
+        $comentario   = trim($_POST['comentario'] ?? '');
+    } else {
+        $body         = getBody();
+        $actividad_id = (int)($body['actividad_id'] ?? 0);
+        $comentario   = trim($body['comentario'] ?? '');
+    }
 
     if (!$actividad_id) jsonError('actividad_id requerido');
 
@@ -54,17 +63,41 @@ if ($method === 'POST') {
         jsonError('Actividad no encontrada o no autorizado', 403);
     }
 
-    $ins = $pdo->prepare('
-        INSERT INTO entregas (actividad_id, alumno_id, comentario)
-        VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE comentario = VALUES(comentario), fecha_entrega = CURRENT_TIMESTAMP
-    ');
-    $ins->execute([$actividad_id, $payload['id'], $comentario]);
+    // Manejo del archivo adjunto
+    $archivo_url = null;
+    if ($isMultipart && isset($_FILES['archivo']) && $_FILES['archivo']['error'] === UPLOAD_ERR_OK) {
+        $uploadDir = __DIR__ . '/uploads/entregas/';
+        if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
 
-    jsonResponse(['message' => 'Entrega registrada'], 201);
+        $ext       = pathinfo($_FILES['archivo']['name'], PATHINFO_EXTENSION);
+        $safeName  = 'entrega_' . $payload['id'] . '_' . $actividad_id . '_' . time() . '.' . $ext;
+        $destPath  = $uploadDir . $safeName;
+
+        if ($_FILES['archivo']['size'] > 20 * 1024 * 1024) {
+            jsonError('El archivo supera los 20 MB');
+        }
+
+        if (move_uploaded_file($_FILES['archivo']['tmp_name'], $destPath)) {
+            $archivo_url = 'uploads/entregas/' . $safeName;
+        } else {
+            jsonError('No se pudo guardar el archivo');
+        }
+    }
+
+    $ins = $pdo->prepare('
+        INSERT INTO entregas (actividad_id, alumno_id, comentario, archivo_url)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            comentario    = VALUES(comentario),
+            archivo_url   = COALESCE(VALUES(archivo_url), archivo_url),
+            fecha_entrega = CURRENT_TIMESTAMP
+    ');
+    $ins->execute([$actividad_id, $payload['id'], $comentario, $archivo_url]);
+
+    jsonResponse(['message' => 'Entrega registrada', 'archivo_url' => $archivo_url], 201);
 }
 
-// ── PUT: solo maestros pueden calificar ───────────────────────────────────
+// ── PUT: maestro califica una entrega ─────────────────────────────────────
 if ($method === 'PUT') {
     if ($payload['rol'] !== 'maestro') {
         jsonError('Solo maestros pueden calificar', 403);
@@ -73,6 +106,7 @@ if ($method === 'PUT') {
     $body         = getBody();
     $entrega_id   = (int)($body['entrega_id']  ?? 0);
     $calificacion = isset($body['calificacion']) ? (float)$body['calificacion'] : null;
+    $retroalimentacion = trim($body['retroalimentacion'] ?? '');
 
     if (!$entrega_id || $calificacion === null) {
         jsonError('entrega_id y calificacion requeridos');
@@ -81,8 +115,8 @@ if ($method === 'PUT') {
         jsonError('Calificación debe estar entre 0 y 100');
     }
 
-    $upd = $pdo->prepare('UPDATE entregas SET calificacion = ? WHERE id = ?');
-    $upd->execute([$calificacion, $entrega_id]);
+    $upd = $pdo->prepare('UPDATE entregas SET calificacion = ?, retroalimentacion = ? WHERE id = ?');
+    $upd->execute([$calificacion, $retroalimentacion, $entrega_id]);
 
     jsonResponse(['message' => 'Calificación registrada']);
 }
