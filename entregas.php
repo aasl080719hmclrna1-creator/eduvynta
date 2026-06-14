@@ -12,32 +12,49 @@ $payload = requireAuth();
 $pdo     = getDB();
 $method  = $_SERVER['REQUEST_METHOD'];
 
-// ── GET: maestro ve todas las entregas de una actividad ───────────────────
+// ── GET ───────────────────────────────────────────────────────────────────────
 if ($method === 'GET') {
-    if ($payload['rol'] !== 'maestro') {
-        jsonError('Acceso denegado', 403);
-    }
-    $actividad_id = (int)($_GET['actividad_id'] ?? 0);
-    if (!$actividad_id) jsonError('actividad_id requerido');
 
-    $stmt = $pdo->prepare('
-        SELECT e.*, u.nombre AS alumno_nombre
-        FROM entregas e
-        JOIN usuarios u ON u.id = e.alumno_id
-        WHERE e.actividad_id = ?
-        ORDER BY e.fecha_entrega DESC
-    ');
-    $stmt->execute([$actividad_id]);
-    jsonResponse($stmt->fetchAll());
+    if ($payload['rol'] === 'maestro') {
+        // Maestro: ve todas las entregas de una actividad
+        $actividad_id = (int)($_GET['actividad_id'] ?? 0);
+        if (!$actividad_id) jsonError('actividad_id requerido');
+
+        $stmt = $pdo->prepare('
+            SELECT e.*, u.nombre AS alumno_nombre
+            FROM entregas e
+            JOIN usuarios u ON u.id = e.alumno_id
+            WHERE e.actividad_id = ?
+            ORDER BY e.fecha_entrega DESC
+        ');
+        $stmt->execute([$actividad_id]);
+        jsonResponse($stmt->fetchAll());
+
+    } else {
+        // Alumno: ve su propia entrega para una actividad
+        $actividad_id = (int)($_GET['actividad_id'] ?? 0);
+        if (!$actividad_id) jsonError('actividad_id requerido');
+
+        $stmt = $pdo->prepare('
+            SELECT e.*
+            FROM entregas e
+            WHERE e.actividad_id = ? AND e.alumno_id = ?
+            LIMIT 1
+        ');
+        $stmt->execute([$actividad_id, $payload['id']]);
+        $entrega = $stmt->fetch();
+
+        // Si no existe entrega devolvemos objeto vacío (no error)
+        jsonResponse($entrega ?: (object)[]);
+    }
 }
 
-// ── POST: alumno sube entrega (con archivo opcional) ──────────────────────
+// ── POST: alumno sube entrega ─────────────────────────────────────────────────
 if ($method === 'POST') {
     if ($payload['rol'] !== 'alumno') {
         jsonError('Solo alumnos pueden entregar tareas', 403);
     }
 
-    // Detectar si viene como multipart/form-data (con archivo) o JSON
     $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
     $isMultipart = str_contains($contentType, 'multipart/form-data');
 
@@ -59,25 +76,20 @@ if ($method === 'POST') {
         WHERE a.id = ? AND ag.alumno_id = ? LIMIT 1
     ');
     $chk->execute([$actividad_id, $payload['id']]);
-    if (!$chk->fetch()) {
-        jsonError('Actividad no encontrada o no autorizado', 403);
-    }
+    if (!$chk->fetch()) jsonError('Actividad no encontrada o no autorizado', 403);
 
-    // Manejo del archivo adjunto
+    // Archivo adjunto
     $archivo_url = null;
     if ($isMultipart && isset($_FILES['archivo']) && $_FILES['archivo']['error'] === UPLOAD_ERR_OK) {
         $uploadDir = __DIR__ . '/uploads/entregas/';
         if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
 
-        $ext       = pathinfo($_FILES['archivo']['name'], PATHINFO_EXTENSION);
-        $safeName  = 'entrega_' . $payload['id'] . '_' . $actividad_id . '_' . time() . '.' . $ext;
-        $destPath  = $uploadDir . $safeName;
+        $ext      = pathinfo($_FILES['archivo']['name'], PATHINFO_EXTENSION);
+        $safeName = 'entrega_' . $payload['id'] . '_' . $actividad_id . '_' . time() . '.' . $ext;
 
-        if ($_FILES['archivo']['size'] > 20 * 1024 * 1024) {
-            jsonError('El archivo supera los 20 MB');
-        }
+        if ($_FILES['archivo']['size'] > 20 * 1024 * 1024) jsonError('El archivo supera los 20 MB');
 
-        if (move_uploaded_file($_FILES['archivo']['tmp_name'], $destPath)) {
+        if (move_uploaded_file($_FILES['archivo']['tmp_name'], $uploadDir . $safeName)) {
             $archivo_url = 'uploads/entregas/' . $safeName;
         } else {
             jsonError('No se pudo guardar el archivo');
@@ -97,26 +109,20 @@ if ($method === 'POST') {
     jsonResponse(['message' => 'Entrega registrada', 'archivo_url' => $archivo_url], 201);
 }
 
-// ── PUT: maestro califica una entrega ─────────────────────────────────────
+// ── PUT: maestro califica ─────────────────────────────────────────────────────
 if ($method === 'PUT') {
-    if ($payload['rol'] !== 'maestro') {
-        jsonError('Solo maestros pueden calificar', 403);
-    }
+    if ($payload['rol'] !== 'maestro') jsonError('Solo maestros pueden calificar', 403);
 
-    $body         = getBody();
-    $entrega_id   = (int)($body['entrega_id']  ?? 0);
-    $calificacion = isset($body['calificacion']) ? (float)$body['calificacion'] : null;
+    $body              = getBody();
+    $entrega_id        = (int)($body['entrega_id']  ?? 0);
+    $calificacion      = isset($body['calificacion']) ? (float)$body['calificacion'] : null;
     $retroalimentacion = trim($body['retroalimentacion'] ?? '');
 
-    if (!$entrega_id || $calificacion === null) {
-        jsonError('entrega_id y calificacion requeridos');
-    }
-    if ($calificacion < 0 || $calificacion > 100) {
-        jsonError('Calificación debe estar entre 0 y 100');
-    }
+    if (!$entrega_id || $calificacion === null) jsonError('entrega_id y calificacion requeridos');
+    if ($calificacion < 0 || $calificacion > 100) jsonError('Calificación debe estar entre 0 y 100');
 
-    $upd = $pdo->prepare('UPDATE entregas SET calificacion = ?, retroalimentacion = ? WHERE id = ?');
-    $upd->execute([$calificacion, $retroalimentacion, $entrega_id]);
+    $pdo->prepare('UPDATE entregas SET calificacion = ?, retroalimentacion = ? WHERE id = ?')
+        ->execute([$calificacion, $retroalimentacion, $entrega_id]);
 
     jsonResponse(['message' => 'Calificación registrada']);
 }
