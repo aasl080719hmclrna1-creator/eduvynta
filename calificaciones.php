@@ -41,6 +41,25 @@ if ($method === 'GET') {
         jsonResponse($stmt->fetchAll());
     }
 
+    // Maestro o alumno: detalle de un alumno específico (para pre-llenar diálogo de edición)
+    if ($alumno_id && $grupo_id) {
+        if ($payload['rol'] === 'alumno' && $payload['id'] !== $alumno_id) {
+            jsonError('Acceso denegado', 403);
+        }
+        $stmt = $pdo->prepare('
+            SELECT c.primer_parcial, c.segundo_parcial, c.examen_final, c.promedio_final,
+                   c.semestre, c.grupo_id,
+                   g.nombre AS grupo_nombre
+            FROM calificaciones c
+            LEFT JOIN grupos g ON g.id = c.grupo_id
+            WHERE c.alumno_id = ? AND c.grupo_id = ?
+            LIMIT 1
+        ');
+        $stmt->execute([$alumno_id, $grupo_id]);
+        $row = $stmt->fetch();
+        jsonResponse($row ? [$row] : []);
+    }
+
     // Alumno: sus calificaciones por grupo
     if ($payload['rol'] === 'alumno') {
         $stmt = $pdo->prepare('
@@ -68,13 +87,15 @@ if ($method === 'POST') {
     $grupo_id       = (int)($body['grupo_id']   ?? 0);
     $materia_id     = (int)($body['materia_id'] ?? 1);
     $semestre       = (int)($body['semestre']   ?? 1);
+
+    // Acepta null, número, o string vacío (vacío = null = sin calificación en ese parcial)
     $primer_parcial  = array_key_exists('primer_parcial',  $body) && $body['primer_parcial']  !== '' ? (float)$body['primer_parcial']  : null;
     $segundo_parcial = array_key_exists('segundo_parcial', $body) && $body['segundo_parcial'] !== '' ? (float)$body['segundo_parcial'] : null;
     $examen_final    = array_key_exists('examen_final',    $body) && $body['examen_final']    !== '' ? (float)$body['examen_final']    : null;
 
     if (!$alumno_id || !$grupo_id) jsonError('alumno_id y grupo_id son requeridos');
 
-    // Validar rango
+    // Validar rango 0-100
     foreach (['primer_parcial' => $primer_parcial, 'segundo_parcial' => $segundo_parcial, 'examen_final' => $examen_final] as $campo => $valor) {
         if ($valor !== null && ($valor < 0 || $valor > 100)) {
             jsonError("$campo debe estar entre 0 y 100");
@@ -86,7 +107,6 @@ if ($method === 'POST') {
     $chk->execute([$grupo_id, $payload['id']]);
     if (!$chk->fetch()) jsonError('Grupo no autorizado', 403);
 
-    // FIX: usar alumno_id en la consulta (no 'id') — la tabla pivot puede no tener PK propia
     $chkA = $pdo->prepare('SELECT alumno_id FROM alumnos_grupos WHERE alumno_id = ? AND grupo_id = ? LIMIT 1');
     $chkA->execute([$alumno_id, $grupo_id]);
     if (!$chkA->fetch()) jsonError('El alumno no pertenece a este grupo', 403);
@@ -102,10 +122,10 @@ if ($method === 'POST') {
     $row = $existing->fetch();
 
     if ($row) {
-        // Conservar valores previos si el campo no llegó en este request
-        $p1 = $primer_parcial  !== null ? $primer_parcial  : ($row['primer_parcial']  !== null ? (float)$row['primer_parcial']  : null);
-        $p2 = $segundo_parcial !== null ? $segundo_parcial : ($row['segundo_parcial'] !== null ? (float)$row['segundo_parcial'] : null);
-        $p3 = $examen_final    !== null ? $examen_final    : ($row['examen_final']    !== null ? (float)$row['examen_final']    : null);
+        // Si el campo llegó en el request (incluso vacío), lo actualiza; si no llegó conserva el valor previo
+        $p1 = array_key_exists('primer_parcial',  $body) ? $primer_parcial  : ($row['primer_parcial']  !== null ? (float)$row['primer_parcial']  : null);
+        $p2 = array_key_exists('segundo_parcial', $body) ? $segundo_parcial : ($row['segundo_parcial'] !== null ? (float)$row['segundo_parcial'] : null);
+        $p3 = array_key_exists('examen_final',    $body) ? $examen_final    : ($row['examen_final']    !== null ? (float)$row['examen_final']    : null);
 
         $partes   = array_values(array_filter([$p1, $p2, $p3], fn($v) => $v !== null));
         $promedio = count($partes) > 0 ? round(array_sum($partes) / count($partes), 2) : null;
