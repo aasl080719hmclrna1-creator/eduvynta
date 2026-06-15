@@ -13,6 +13,7 @@ error_reporting(0);
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/response.php';
+require_once __DIR__ . '/jwt.php';
 
 setCorsHeaders();
 ob_end_clean();
@@ -196,9 +197,6 @@ function getFcmAccessToken(): string {
     return $data['access_token'];
 }
 
-function base64UrlEncode(string $data): string {
-    return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
-}
 
 /**
  * Envía una notificación FCM v1 a un token específico.
