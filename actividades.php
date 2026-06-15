@@ -93,8 +93,7 @@ if ($method === 'POST') {
         $archivo_url = 'uploads/actividades/' . $safeName;
     }
 
-    // Aseguramos que la columna archivo_url exista (idempotente)
-    $pdo->exec("ALTER TABLE actividades ADD COLUMN IF NOT EXISTS archivo_url VARCHAR(512) NULL");
+    $pdo->exec("ALTER TABLE actividades ADD COLUMN  archivo_url VARCHAR(512) NULL");
 
     $ins = $pdo->prepare('
         INSERT INTO actividades (maestro_id, grupo_id, materia_id, descripcion, fecha_limite, archivo_url)
