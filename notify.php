@@ -28,8 +28,8 @@ if ($method === 'PUT') {
 
     if (!$token) jsonError('fcm_token es requerido');
 
-    // Aseguramos que la columna exista (idempotente)
-    $pdo->exec("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fcm_token VARCHAR(512) NULL");
+
+  
 
     $stmt = $pdo->prepare('UPDATE usuarios SET fcm_token = ? WHERE id = ?');
     $stmt->execute([$token, $payload['id']]);
@@ -66,8 +66,7 @@ if ($method === 'POST') {
         jsonError('tipo, titulo y mensaje son requeridos');
     }
 
-    // Aseguramos que la columna fcm_token exista
-    $pdo->exec("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fcm_token VARCHAR(512) NULL");
+
 
     // Obtener tokens FCM según el alcance
     if ($alumno_id > 0) {
