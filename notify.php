@@ -1,45 +1,135 @@
 <?php
 /**
- * notify.php - EduVynta
- * Envía notificaciones FCM a alumnos/maestros usando Service Account (OAuth2)
- * REQUIERE: columna fcm_token en tabla usuarios
+ * notify.php  –  EduVynta
+ *
+ * Dos responsabilidades:
+ *   PUT  → El alumno registra/actualiza su FCM token al iniciar sesión.
+ *   POST → El maestro (o el sistema) dispara una notificación a uno o varios alumnos.
+ *
+ * IMPORTANTE: Para que funcione, en Railway debes agregar la variable de entorno:
+ *   FCM_SERVICE_ACCOUNT_JSON  →  contenido del JSON de cuenta de servicio de Firebase
+ *   (descárgalo en Firebase Console → Configuración → Cuentas de servicio → Generar clave privada)
  */
 
-header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
+ob_start();
+ini_set('display_errors', '0');
+error_reporting(0);
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit();
+require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/response.php';
+
+setCorsHeaders();
+ob_end_clean();
+
+$payload = requireAuth();
+$pdo     = getDB();
+$method  = $_SERVER['REQUEST_METHOD'];
+
+// ── PUT: el alumno guarda su FCM token ────────────────────────────────────────
+if ($method === 'PUT') {
+    $body  = getBody();
+    $token = trim($body['fcm_token'] ?? '');
+
+    if (!$token) jsonError('fcm_token es requerido');
+
+    // Aseguramos que la columna exista (idempotente)
+    $pdo->exec("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fcm_token VARCHAR(512) NULL");
+
+    $stmt = $pdo->prepare('UPDATE usuarios SET fcm_token = ? WHERE id = ?');
+    $stmt->execute([$token, $payload['id']]);
+
+    jsonResponse(['message' => 'Token FCM registrado']);
 }
 
-require_once 'db.php';
+// ── POST: enviar notificación push a alumno(s) ────────────────────────────────
+if ($method === 'POST') {
+    if ($payload['rol'] !== 'maestro') {
+        jsonError('Solo maestros pueden enviar notificaciones', 403);
+    }
 
-$raw  = file_get_contents('php://input');
-$body = json_decode($raw, true);
+    $body      = getBody();
+    $tipo      = $body['tipo']       ?? '';   // 'nueva_tarea' | 'tarea_modificada' | 'calificacion'
+    $alumno_id = (int)($body['alumno_id'] ?? 0);
+    $grupo_id  = (int)($body['grupo_id']  ?? 0);
+    $titulo    = trim($body['titulo']     ?? '');
+    $mensaje   = trim($body['mensaje']    ?? '');
+    $data      = $body['data']            ?? [];
 
-if (!$body || !isset($body['tipo'])) {
-    http_response_code(400);
-    echo json_encode(['error' => 'Body inválido o falta "tipo"']);
-    exit();
+    if (!$tipo || !$titulo || !$mensaje) {
+        jsonError('tipo, titulo y mensaje son requeridos');
+    }
+
+    // Obtener tokens FCM según el alcance
+    if ($alumno_id > 0) {
+        // Notificación a UN alumno específico (calificación)
+        $stmt = $pdo->prepare(
+            'SELECT fcm_token FROM usuarios WHERE id = ? AND fcm_token IS NOT NULL LIMIT 1'
+        );
+        $stmt->execute([$alumno_id]);
+        $tokens = array_column($stmt->fetchAll(), 'fcm_token');
+    } elseif ($grupo_id > 0) {
+        // Notificación a TODOS los alumnos del grupo (nueva tarea / tarea modificada)
+        // Verificar que el grupo pertenece al maestro
+        $chk = $pdo->prepare('SELECT id FROM grupos WHERE id = ? AND maestro_id = ? LIMIT 1');
+        $chk->execute([$grupo_id, $payload['id']]);
+        if (!$chk->fetch()) jsonError('Grupo no autorizado', 403);
+
+        $stmt = $pdo->prepare(
+            'SELECT u.fcm_token
+             FROM alumnos_grupos ag
+             JOIN usuarios u ON u.id = ag.alumno_id
+             WHERE ag.grupo_id = ? AND u.fcm_token IS NOT NULL'
+        );
+        $stmt->execute([$grupo_id]);
+        $tokens = array_column($stmt->fetchAll(), 'fcm_token');
+    } else {
+        jsonError('Debes indicar alumno_id o grupo_id');
+    }
+
+    if (empty($tokens)) {
+        jsonResponse(['message' => 'Sin dispositivos registrados', 'enviados' => 0]);
+    }
+
+    // Enviar via FCM v1 (HTTP)
+    $enviados = 0;
+    $errores  = [];
+    foreach ($tokens as $fcmToken) {
+        $result = sendFcmNotification($fcmToken, $titulo, $mensaje, $data);
+        if ($result['ok']) {
+            $enviados++;
+        } else {
+            $errores[] = $result['error'];
+        }
+    }
+
+    jsonResponse([
+        'message'  => "Notificaciones enviadas: $enviados",
+        'enviados' => $enviados,
+        'errores'  => $errores,
+    ]);
 }
 
-$tipo = $body['tipo'];
-$data = $body['data'] ?? [];
+jsonError('Método no permitido', 405);
 
-// ── OAuth2 token desde Service Account ────────────────────────
-function getAccessToken(): string {
-    $json = $_ENV['FCM_SERVICE_ACCOUNT_JSON'] ?? getenv('FCM_SERVICE_ACCOUNT_JSON');
-    if (!$json) throw new Exception('FCM_SERVICE_ACCOUNT_JSON no configurado');
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers FCM v1
+// ─────────────────────────────────────────────────────────────────────────────
 
-    $sa  = json_decode($json, true);
-    if (!$sa) throw new Exception('FCM_SERVICE_ACCOUNT_JSON no es JSON válido');
+/**
+ * Obtiene un Access Token OAuth2 usando la cuenta de servicio de Firebase.
+ * El JSON de la cuenta de servicio debe estar en la variable de entorno FCM_SERVICE_ACCOUNT_JSON.
+ */
+function getFcmAccessToken(): string {
+    $json = $_ENV['FCM_SERVICE_ACCOUNT_JSON'] ?? getenv('FCM_SERVICE_ACCOUNT_JSON') ?? '';
+    if (!$json) throw new Exception('FCM_SERVICE_ACCOUNT_JSON no configurado en variables de entorno');
+
+    $sa = json_decode($json, true);
+    if (!$sa) throw new Exception('FCM_SERVICE_ACCOUNT_JSON tiene formato inválido');
 
     $now    = time();
-    $header  = base64UrlEncode(json_encode(['alg' => 'RS256', 'typ' => 'JWT']));
-    $payload = base64UrlEncode(json_encode([
+    $header = base64UrlEncode(json_encode(['alg' => 'RS256', 'typ' => 'JWT']));
+    $claim  = base64UrlEncode(json_encode([
         'iss'   => $sa['client_email'],
         'scope' => 'https://www.googleapis.com/auth/firebase.messaging',
         'aud'   => 'https://oauth2.googleapis.com/token',
@@ -47,12 +137,9 @@ function getAccessToken(): string {
         'exp'   => $now + 3600,
     ]));
 
-    $toSign = "$header.$payload";
-    $key    = openssl_pkey_get_private($sa['private_key']);
-    if (!$key) throw new Exception('No se pudo cargar la private_key del Service Account');
-
-    openssl_sign($toSign, $sig, $key, OPENSSL_ALGO_SHA256);
-    $jwt = "$toSign." . base64UrlEncode($sig);
+    $sigInput = "$header.$claim";
+    openssl_sign($sigInput, $sig, $sa['private_key'], 'SHA256');
+    $jwt = "$sigInput." . base64UrlEncode($sig);
 
     $ch = curl_init('https://oauth2.googleapis.com/token');
     curl_setopt_array($ch, [
@@ -63,230 +150,70 @@ function getAccessToken(): string {
             'assertion'  => $jwt,
         ]),
     ]);
-    $res  = curl_exec($ch);
-    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $resp = curl_exec($ch);
     curl_close($ch);
 
-    if ($code !== 200) throw new Exception("Error OAuth2 ($code): $res");
-
-    $tok = json_decode($res, true);
-    return $tok['access_token'] ?? throw new Exception('No se recibió access_token');
+    $data = json_decode($resp, true);
+    if (empty($data['access_token'])) {
+        throw new Exception('No se pudo obtener access_token de Google: ' . $resp);
+    }
+    return $data['access_token'];
 }
 
 function base64UrlEncode(string $data): string {
     return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
 }
 
-// ── Enviar FCM a un token ──────────────────────────────────────
-function sendFCM(string $fcmToken, string $title, string $bodyText, array $dataPayload, string $accessToken): bool {
-    $sa        = json_decode(getenv('FCM_SERVICE_ACCOUNT_JSON'), true);
-    $projectId = $sa['project_id'];
-    $url       = "https://fcm.googleapis.com/v1/projects/{$projectId}/messages:send";
+/**
+ * Envía una notificación FCM v1 a un token específico.
+ */
+function sendFcmNotification(string $token, string $titulo, string $cuerpo, array $data = []): array {
+    try {
+        $accessToken = getFcmAccessToken();
 
-    $message = [
-        'message' => [
-            'token'        => $fcmToken,
-            'notification' => ['title' => $title, 'body' => $bodyText],
-            'data'         => array_map('strval', $dataPayload),
-            'android'      => ['priority' => 'high', 'notification' => ['sound' => 'default']],
-            'apns'         => ['payload' => ['aps' => ['sound' => 'default']]],
-        ],
-    ];
+        // Obtener project_id del JSON de cuenta de servicio
+        $jsonStr   = $_ENV['FCM_SERVICE_ACCOUNT_JSON'] ?? getenv('FCM_SERVICE_ACCOUNT_JSON') ?? '';
+        $sa        = json_decode($jsonStr, true);
+        $projectId = $sa['project_id'] ?? 'aduvynta';
 
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER     => [
-            'Content-Type: application/json',
-            "Authorization: Bearer $accessToken",
-        ],
-        CURLOPT_POSTFIELDS => json_encode($message),
-    ]);
-    $res  = curl_exec($ch);
-    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+        $url     = "https://fcm.googleapis.com/v1/projects/$projectId/messages:send";
+        $payload = [
+            'message' => [
+                'token' => $token,
+                'notification' => [
+                    'title' => $titulo,
+                    'body'  => $cuerpo,
+                ],
+                'android' => [
+                    'priority' => 'high',
+                    'notification' => [
+                        'channel_id' => 'eduvynta_channel',
+                        'sound'      => 'default',
+                    ],
+                ],
+                'data' => array_map('strval', $data), // FCM data solo acepta strings
+            ],
+        ];
 
-    if ($code !== 200) {
-        error_log("FCM error ($code): $res  token: $fcmToken");
-        return false;
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER     => [
+                'Authorization: Bearer ' . $accessToken,
+                'Content-Type: application/json',
+            ],
+            CURLOPT_POSTFIELDS => json_encode($payload),
+        ]);
+        $resp    = curl_exec($ch);
+        $code    = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($code >= 200 && $code < 300) {
+            return ['ok' => true];
+        }
+        return ['ok' => false, 'error' => "FCM error $code: $resp"];
+    } catch (Exception $e) {
+        return ['ok' => false, 'error' => $e->getMessage()];
     }
-    return true;
-}
-
-// ── Tokens de alumnos de un grupo ─────────────────────────────
-function getTokensAlumnosGrupo(PDO $pdo, int $grupoId): array {
-    $stmt = $pdo->prepare("
-        SELECT u.fcm_token
-        FROM usuarios u
-        INNER JOIN usuarios_grupos ug ON ug.usuario_id = u.id
-        WHERE ug.grupo_id = :grupo_id
-          AND u.rol = 'alumno'
-          AND u.fcm_token IS NOT NULL
-          AND u.fcm_token != ''
-    ");
-    $stmt->execute([':grupo_id' => $grupoId]);
-    return $stmt->fetchAll(PDO::FETCH_COLUMN);
-}
-
-// ── Token de un alumno específico ─────────────────────────────
-function getTokenAlumno(PDO $pdo, int $alumnoId): ?string {
-    $stmt = $pdo->prepare("
-        SELECT fcm_token FROM usuarios
-        WHERE id = :id AND fcm_token IS NOT NULL AND fcm_token != ''
-    ");
-    $stmt->execute([':id' => $alumnoId]);
-    return $stmt->fetchColumn() ?: null;
-}
-
-// ── Info de actividad ──────────────────────────────────────────
-function getActividad(PDO $pdo, int $actividadId): ?array {
-    $stmt = $pdo->prepare("
-        SELECT a.*, m.nombre AS materia_nombre
-        FROM actividades a
-        LEFT JOIN materias m ON m.id = a.materia_id
-        WHERE a.id = :id
-    ");
-    $stmt->execute([':id' => $actividadId]);
-    return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
-}
-
-// ── Calificación de un alumno en una actividad ─────────────────
-function getCalificacion(PDO $pdo, int $actividadId, int $alumnoId): ?array {
-    $stmt = $pdo->prepare("
-        SELECT * FROM calificaciones
-        WHERE actividad_id = :a AND alumno_id = :u
-    ");
-    $stmt->execute([':a' => $actividadId, ':u' => $alumnoId]);
-    return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
-}
-
-// ── Lógica principal ───────────────────────────────────────────
-try {
-    $accessToken = getAccessToken();
-
-    switch ($tipo) {
-
-        // 1. Nueva tarea → todos los alumnos del grupo
-        case 'nueva_tarea': {
-            $grupoId     = (int)($data['grupo_id'] ?? $body['grupo_id'] ?? 0);
-            $actividadId = (int)($data['actividad_id'] ?? 0);
-
-            if (!$grupoId) throw new Exception('grupo_id requerido');
-
-            $actividad = $actividadId ? getActividad($pdo, $actividadId) : null;
-            $titulo    = $body['titulo'] ?? 'Nueva tarea publicada';
-            $mensaje   = $actividad
-                ? "📚 {$actividad['descripcion']} — Entrega: {$actividad['fecha_limite']}"
-                : ($body['mensaje'] ?? 'Tienes una nueva tarea pendiente');
-
-            $tokens = getTokensAlumnosGrupo($pdo, $grupoId);
-
-            if (empty($tokens)) {
-                echo json_encode(['ok' => true, 'enviados' => 0, 'msg' => 'Sin tokens registrados aún']);
-                exit();
-            }
-
-            $ok = 0;
-            foreach ($tokens as $token) {
-                $sent = sendFCM($token, $titulo, $mensaje, [
-                    'tipo'         => 'nueva_tarea',
-                    'actividad_id' => (string)$actividadId,
-                    'grupo_id'     => (string)$grupoId,
-                    'click_action' => 'FLUTTER_NOTIFICATION_CLICK',
-                ], $accessToken);
-                if ($sent) $ok++;
-            }
-
-            echo json_encode(['ok' => true, 'enviados' => $ok, 'total' => count($tokens)]);
-            break;
-        }
-
-        // 2. Tarea calificada → al alumno con su nota
-        case 'tarea_calificada': {
-            $alumnoId    = (int)($data['alumno_id'] ?? 0);
-            $actividadId = (int)($data['actividad_id'] ?? 0);
-
-            if (!$alumnoId || !$actividadId) {
-                throw new Exception('alumno_id y actividad_id requeridos');
-            }
-
-            $actividad    = getActividad($pdo, $actividadId);
-            $calificacion = getCalificacion($pdo, $actividadId, $alumnoId);
-            $calText      = $calificacion ? $calificacion['calificacion'] : ($data['calificacion'] ?? '—');
-            $desc         = $actividad['descripcion'] ?? 'tu actividad';
-
-            $titulo  = '✅ ¡Tu tarea fue calificada!';
-            $mensaje = "Obtuviste $calText en: $desc";
-
-            $token = getTokenAlumno($pdo, $alumnoId);
-            if (!$token) {
-                echo json_encode(['ok' => true, 'enviados' => 0, 'msg' => 'Alumno sin token FCM']);
-                exit();
-            }
-
-            $sent = sendFCM($token, $titulo, $mensaje, [
-                'tipo'         => 'tarea_calificada',
-                'actividad_id' => (string)$actividadId,
-                'alumno_id'    => (string)$alumnoId,
-                'calificacion' => (string)$calText,
-                'click_action' => 'FLUTTER_NOTIFICATION_CLICK',
-            ], $accessToken);
-
-            echo json_encode(['ok' => $sent, 'enviados' => $sent ? 1 : 0]);
-            break;
-        }
-
-        // 3. Recordatorio → alumnos que NO han entregado
-        case 'recordatorio_tarea': {
-            $grupoId     = (int)($data['grupo_id'] ?? 0);
-            $actividadId = (int)($data['actividad_id'] ?? 0);
-
-            if (!$grupoId || !$actividadId) {
-                throw new Exception('grupo_id y actividad_id requeridos');
-            }
-
-            $actividad = getActividad($pdo, $actividadId);
-            if (!$actividad) throw new Exception('Actividad no encontrada');
-
-            $stmt = $pdo->prepare("
-                SELECT u.fcm_token
-                FROM usuarios u
-                INNER JOIN usuarios_grupos ug ON ug.usuario_id = u.id
-                WHERE ug.grupo_id = :grupo_id
-                  AND u.rol = 'alumno'
-                  AND u.fcm_token IS NOT NULL AND u.fcm_token != ''
-                  AND u.id NOT IN (
-                      SELECT alumno_id FROM entregas WHERE actividad_id = :actividad_id
-                  )
-            ");
-            $stmt->execute([':grupo_id' => $grupoId, ':actividad_id' => $actividadId]);
-            $tokens = $stmt->fetchAll(PDO::FETCH_COLUMN);
-
-            $titulo  = '⏰ Recuerda entregar tu tarea';
-            $mensaje = "Pendiente: {$actividad['descripcion']} — Vence: {$actividad['fecha_limite']}";
-
-            $ok = 0;
-            foreach ($tokens as $token) {
-                if (sendFCM($token, $titulo, $mensaje, [
-                    'tipo'         => 'recordatorio_tarea',
-                    'actividad_id' => (string)$actividadId,
-                    'grupo_id'     => (string)$grupoId,
-                    'click_action' => 'FLUTTER_NOTIFICATION_CLICK',
-                ], $accessToken)) $ok++;
-            }
-
-            echo json_encode(['ok' => true, 'enviados' => $ok, 'total' => count($tokens)]);
-            break;
-        }
-
-        default:
-            http_response_code(400);
-            echo json_encode(['error' => "Tipo desconocido: $tipo"]);
-    }
-
-} catch (Exception $e) {
-    http_response_code(500);
-    error_log('[notify.php] ' . $e->getMessage());
-    echo json_encode(['error' => $e->getMessage()]);
 }

@@ -1,149 +1,154 @@
 <?php
-/**
- * calificaciones.php - EduVynta
- * El maestro sube/actualiza la calificación de un alumno en una actividad.
- * Al guardar, dispara notificación FCM al alumno automáticamente.
- */
+ob_start();
+ini_set('display_errors', '0');
+error_reporting(0);
 
-header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, GET, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
+require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/response.php';
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit();
-}
+setCorsHeaders();
+ob_end_clean();
 
-require_once 'db.php';
-require_once 'auth.php'; // tu middleware JWT → $usuario
+$payload = requireAuth();
+$pdo     = getDB();
+$method  = $_SERVER['REQUEST_METHOD'];
 
-// Solo maestros pueden calificar
-if (($usuario['rol'] ?? '') !== 'maestro') {
-    http_response_code(403);
-    echo json_encode(['error' => 'Solo maestros pueden calificar']);
-    exit();
-}
-
-$method = $_SERVER['REQUEST_METHOD'];
-
-// ── GET: listar calificaciones de una actividad ────────────────
+// ── GET ───────────────────────────────────────────────────────────────────────
 if ($method === 'GET') {
-    $actividadId = (int)($_GET['actividad_id'] ?? 0);
-    if (!$actividadId) {
-        http_response_code(400);
-        echo json_encode(['error' => 'actividad_id requerido']);
-        exit();
+    $alumno_id = (int)($_GET['alumno_id'] ?? 0);
+    $grupo_id  = (int)($_GET['grupo_id']  ?? 0);
+
+    // Maestro: lista de alumnos del grupo con promedio_final
+    if ($payload['rol'] === 'maestro' && $grupo_id && !$alumno_id) {
+        $chk = $pdo->prepare('SELECT id FROM grupos WHERE id = ? AND maestro_id = ? LIMIT 1');
+        $chk->execute([$grupo_id, $payload['id']]);
+        if (!$chk->fetch()) jsonError('Grupo no autorizado', 403);
+
+        $stmt = $pdo->prepare('
+            SELECT u.id AS alumno_id,
+                   u.nombre,
+                   ROUND(AVG(c.promedio_final), 2) AS promedio,
+                   COUNT(c.alumno_id)              AS materias_calificadas
+            FROM alumnos_grupos ag
+            JOIN usuarios u ON u.id = ag.alumno_id
+            LEFT JOIN calificaciones c ON c.alumno_id = u.id AND c.grupo_id = ?
+            WHERE ag.grupo_id = ?
+            GROUP BY u.id, u.nombre
+            ORDER BY u.nombre ASC
+        ');
+        $stmt->execute([$grupo_id, $grupo_id]);
+        jsonResponse($stmt->fetchAll());
     }
 
-    $stmt = $pdo->prepare("
-        SELECT c.*, 
-               CONCAT(u.nombre, ' ', u.apellido) AS alumno_nombre,
-               u.email AS alumno_email
-        FROM calificaciones c
-        INNER JOIN usuarios u ON u.id = c.alumno_id
-        WHERE c.actividad_id = :actividad_id
-        ORDER BY u.nombre
-    ");
-    $stmt->execute([':actividad_id' => $actividadId]);
-    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
-    exit();
+    // Maestro o alumno: detalle de un alumno específico (para pre-llenar diálogo de edición)
+    if ($alumno_id && $grupo_id) {
+        if ($payload['rol'] === 'alumno' && $payload['id'] !== $alumno_id) {
+            jsonError('Acceso denegado', 403);
+        }
+        $stmt = $pdo->prepare('
+            SELECT c.primer_parcial, c.segundo_parcial, c.examen_final, c.promedio_final,
+                   c.semestre, c.grupo_id,
+                   g.nombre AS grupo_nombre
+            FROM calificaciones c
+            LEFT JOIN grupos g ON g.id = c.grupo_id
+            WHERE c.alumno_id = ? AND c.grupo_id = ?
+            LIMIT 1
+        ');
+        $stmt->execute([$alumno_id, $grupo_id]);
+        $row = $stmt->fetch();
+        jsonResponse($row ? [$row] : []);
+    }
+
+    // Alumno: sus calificaciones por grupo
+    if ($payload['rol'] === 'alumno') {
+        $stmt = $pdo->prepare('
+            SELECT c.primer_parcial, c.segundo_parcial, c.examen_final, c.promedio_final,
+                   c.semestre, c.grupo_id,
+                   g.nombre AS grupo_nombre
+            FROM calificaciones c
+            LEFT JOIN grupos g ON g.id = c.grupo_id
+            WHERE c.alumno_id = ?
+            ORDER BY g.nombre ASC
+        ');
+        $stmt->execute([$payload['id']]);
+        jsonResponse($stmt->fetchAll());
+    }
+
+    jsonError('Parámetros inválidos');
 }
 
-// ── POST: guardar/actualizar calificación ──────────────────────
+// ── POST: guardar/actualizar calificación ─────────────────────────────────────
 if ($method === 'POST') {
-    $raw  = file_get_contents('php://input');
-    $body = json_decode($raw, true);
+    if ($payload['rol'] !== 'maestro') jsonError('Solo maestros pueden calificar', 403);
 
-    $actividadId  = (int)($body['actividad_id'] ?? 0);
-    $alumnoId     = (int)($body['alumno_id'] ?? 0);
-    $calificacion = $body['calificacion'] ?? null;
-    $comentario   = trim($body['comentario'] ?? '');
+    $body           = getBody();
+    $alumno_id      = (int)($body['alumno_id']  ?? 0);
+    $grupo_id       = (int)($body['grupo_id']   ?? 0);
+    $materia_id     = (int)($body['materia_id'] ?? 1);
+    $semestre       = (int)($body['semestre']   ?? 1);
 
-    if (!$actividadId || !$alumnoId || $calificacion === null) {
-        http_response_code(400);
-        echo json_encode(['error' => 'actividad_id, alumno_id y calificacion son requeridos']);
-        exit();
-    }
+    // Acepta null, número, o string vacío (vacío = null = sin calificación en ese parcial)
+    $primer_parcial  = array_key_exists('primer_parcial',  $body) && $body['primer_parcial']  !== '' ? (float)$body['primer_parcial']  : null;
+    $segundo_parcial = array_key_exists('segundo_parcial', $body) && $body['segundo_parcial'] !== '' ? (float)$body['segundo_parcial'] : null;
+    $examen_final    = array_key_exists('examen_final',    $body) && $body['examen_final']    !== '' ? (float)$body['examen_final']    : null;
+
+    if (!$alumno_id || !$grupo_id) jsonError('alumno_id y grupo_id son requeridos');
 
     // Validar rango 0-100
-    $calNum = floatval($calificacion);
-    if ($calNum < 0 || $calNum > 100) {
-        http_response_code(400);
-        echo json_encode(['error' => 'La calificación debe estar entre 0 y 100']);
-        exit();
+    foreach (['primer_parcial' => $primer_parcial, 'segundo_parcial' => $segundo_parcial, 'examen_final' => $examen_final] as $campo => $valor) {
+        if ($valor !== null && ($valor < 0 || $valor > 100)) {
+            jsonError("$campo debe estar entre 0 y 100");
+        }
     }
 
-    try {
-        // Upsert: actualizar si ya existe, insertar si no
-        $stmt = $pdo->prepare("
-            INSERT INTO calificaciones (actividad_id, alumno_id, calificacion, comentario, maestro_id, created_at, updated_at)
-            VALUES (:actividad_id, :alumno_id, :calificacion, :comentario, :maestro_id, NOW(), NOW())
-            ON DUPLICATE KEY UPDATE
-                calificacion = VALUES(calificacion),
-                comentario   = VALUES(comentario),
-                updated_at   = NOW()
-        ");
-        $stmt->execute([
-            ':actividad_id' => $actividadId,
-            ':alumno_id'    => $alumnoId,
-            ':calificacion' => $calNum,
-            ':comentario'   => $comentario,
-            ':maestro_id'   => $usuario['id'],
-        ]);
+    // Verificar que el grupo pertenece al maestro
+    $chk = $pdo->prepare('SELECT id FROM grupos WHERE id = ? AND maestro_id = ? LIMIT 1');
+    $chk->execute([$grupo_id, $payload['id']]);
+    if (!$chk->fetch()) jsonError('Grupo no autorizado', 403);
 
-        // ── Disparar notificación FCM al alumno ────────────────
-        notificarCalificacion($actividadId, $alumnoId, $calNum);
+    $chkA = $pdo->prepare('SELECT alumno_id FROM alumnos_grupos WHERE alumno_id = ? AND grupo_id = ? LIMIT 1');
+    $chkA->execute([$alumno_id, $grupo_id]);
+    if (!$chkA->fetch()) jsonError('El alumno no pertenece a este grupo', 403);
 
-        echo json_encode([
-            'ok'           => true,
-            'mensaje'      => 'Calificación guardada',
-            'calificacion' => $calNum,
-        ]);
+    // Verificar si ya existe una calificación para este alumno+grupo
+    $existing = $pdo->prepare('
+        SELECT primer_parcial, segundo_parcial, examen_final
+        FROM calificaciones
+        WHERE alumno_id = ? AND grupo_id = ?
+        LIMIT 1
+    ');
+    $existing->execute([$alumno_id, $grupo_id]);
+    $row = $existing->fetch();
 
-    } catch (Exception $e) {
-        http_response_code(500);
-        error_log('[calificaciones.php] ' . $e->getMessage());
-        echo json_encode(['error' => $e->getMessage()]);
+    if ($row) {
+        // Si el campo llegó en el request (incluso vacío), lo actualiza; si no llegó conserva el valor previo
+        $p1 = array_key_exists('primer_parcial',  $body) ? $primer_parcial  : ($row['primer_parcial']  !== null ? (float)$row['primer_parcial']  : null);
+        $p2 = array_key_exists('segundo_parcial', $body) ? $segundo_parcial : ($row['segundo_parcial'] !== null ? (float)$row['segundo_parcial'] : null);
+        $p3 = array_key_exists('examen_final',    $body) ? $examen_final    : ($row['examen_final']    !== null ? (float)$row['examen_final']    : null);
+
+        $partes   = array_values(array_filter([$p1, $p2, $p3], fn($v) => $v !== null));
+        $promedio = count($partes) > 0 ? round(array_sum($partes) / count($partes), 2) : null;
+
+        $upd = $pdo->prepare('
+            UPDATE calificaciones
+            SET primer_parcial=?, segundo_parcial=?, examen_final=?, promedio_final=?, semestre=?
+            WHERE alumno_id=? AND grupo_id=?
+        ');
+        $upd->execute([$p1, $p2, $p3, $promedio, $semestre, $alumno_id, $grupo_id]);
+    } else {
+        $partes   = array_values(array_filter([$primer_parcial, $segundo_parcial, $examen_final], fn($v) => $v !== null));
+        $promedio = count($partes) > 0 ? round(array_sum($partes) / count($partes), 2) : null;
+
+        $ins = $pdo->prepare('
+            INSERT INTO calificaciones
+                (alumno_id, grupo_id, materia_id, semestre, primer_parcial, segundo_parcial, examen_final, promedio_final)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ');
+        $ins->execute([$alumno_id, $grupo_id, $materia_id, $semestre, $primer_parcial, $segundo_parcial, $examen_final, $promedio]);
     }
-    exit();
+
+    jsonResponse(['message' => 'Calificación guardada', 'promedio' => $promedio], 201);
 }
 
-http_response_code(405);
-echo json_encode(['error' => 'Método no permitido']);
-
-// ── Helper: llama notify.php internamente ──────────────────────
-function notificarCalificacion(int $actividadId, int $alumnoId, float $cal): void {
-    // Llamada interna al mismo servidor (no sale a internet)
-    $baseUrl = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' ? 'https' : 'http')
-             . '://' . $_SERVER['HTTP_HOST']
-             . rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
-
-    $payload = json_encode([
-        'tipo'    => 'tarea_calificada',
-        'titulo'  => '¡Tu tarea fue calificada!',
-        'mensaje' => "Obtuviste $cal",
-        'data'    => [
-            'tipo'         => 'tarea_calificada',
-            'actividad_id' => (string)$actividadId,
-            'alumno_id'    => (string)$alumnoId,
-            'calificacion' => (string)$cal,
-        ],
-    ]);
-
-    $ch = curl_init("$baseUrl/notify.php");
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 5,
-        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-        CURLOPT_POSTFIELDS     => $payload,
-    ]);
-    $res  = curl_exec($ch);
-    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($code !== 200) {
-        error_log("[calificaciones.php] notify.php respondió $code: $res");
-    }
-}
+jsonError('Método no permitido', 405);
