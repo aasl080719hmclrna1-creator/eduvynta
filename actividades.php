@@ -93,7 +93,7 @@ if ($method === 'POST') {
         $archivo_url = 'uploads/actividades/' . $safeName;
     }
 
-    $pdo->exec("ALTER TABLE actividades ADD COLUMN  archivo_url VARCHAR(512) NULL");
+
 
     $ins = $pdo->prepare('
         INSERT INTO actividades (maestro_id, grupo_id, materia_id, descripcion, fecha_limite, archivo_url)
