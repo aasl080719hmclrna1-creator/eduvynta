@@ -38,21 +38,23 @@ if ($payload['rol'] === 'maestro') {
         ? round($asist['presentes'] / $asist['total'] * 100, 1)
         : null;
 
-    $stmtProm = $pdo->prepare('
-        SELECT AVG(c.promedio_final) AS prom
-        FROM calificaciones c
-        JOIN materias m ON m.id = c.materia_id
-        JOIN grupos g   ON g.id = m.grupo_id
-        WHERE g.maestro_id = ? AND c.promedio_final IS NOT NULL
+    // Alumnos que NO han entregado alguna actividad activa del maestro
+    $stmtNoEntr = $pdo->prepare('
+        SELECT COUNT(*) AS total
+        FROM actividades a
+        JOIN grupos g ON g.id = a.grupo_id
+        JOIN alumnos_grupos ag ON ag.grupo_id = g.id
+        LEFT JOIN entregas e ON e.actividad_id = a.id AND e.alumno_id = ag.alumno_id
+        WHERE g.maestro_id = ? AND e.id IS NULL
     ');
-    $stmtProm->execute([$id]);
-    $prom = $stmtProm->fetchColumn();
+    $stmtNoEntr->execute([$id]);
+    $noEntregadas = (int)$stmtNoEntr->fetchColumn();
 
     jsonResponse([
         'total_alumnos'          => $totalAlumnos,
         'total_actividades'      => $totalActs,
         'porcentaje_asistencias' => $porcAsist,
-        'promedio_grupo'         => $prom !== false ? round((float)$prom, 2) : null,
+        'no_entregadas'          => $noEntregadas,
     ]);
 
 } else {
